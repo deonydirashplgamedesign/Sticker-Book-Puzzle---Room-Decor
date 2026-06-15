@@ -1,0 +1,12 @@
+export const REF_WIDTH = 1080;
+export const REF_HEIGHT = 1920;
+
+export const CTA_FALLBACK_URL = 'about:blank';
+
+export const EVENTS = {
+    DISPLAYED: 'DISPLAYED',
+    CTA_CLICKED: 'CTA_CLICKED',
+    ENDCARD_SHOWN: 'ENDCARD_SHOWN',
+    CHALLENGE_STARTED: 'CHALLENGE_STARTED',
+    CHALLENGE_SOLVED: 'CHALLENGE_SOLVED'
+};
