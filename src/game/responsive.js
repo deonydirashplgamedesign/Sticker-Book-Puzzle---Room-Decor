@@ -2,12 +2,12 @@ export const REF_WIDTH = 1080;
 export const REF_HEIGHT = 1920;
 
 const RETRY_DELAYS = [100, 300, 600];
+const CANVAS_BLEED_PX = 24;
 
 export function getViewportSize()
 {
-    const visualViewport = window.visualViewport;
-    const width = Math.max(1, Math.round(visualViewport?.width ?? window.innerWidth));
-    const height = Math.max(1, Math.round(visualViewport?.height ?? window.innerHeight));
+    const width = Math.max(1, Math.round(window.innerWidth));
+    const height = Math.max(1, Math.round(window.innerHeight));
     const dpr = Math.max(1, window.devicePixelRatio || 1);
 
     return {
@@ -39,21 +39,35 @@ export function resizeGameToViewport(game)
 {
     const viewport = getViewportSize();
     const canvas = game.canvas;
+    const cssWidth = viewport.cssWidth + CANVAS_BLEED_PX * 2;
+    const cssHeight = viewport.cssHeight + CANVAS_BLEED_PX * 2;
+    const pixelWidth = Math.round(cssWidth * viewport.dpr);
+    const pixelHeight = Math.round(cssHeight * viewport.dpr);
 
     if (canvas)
     {
-        canvas.style.width = `${viewport.cssWidth}px`;
-        canvas.style.height = `${viewport.cssHeight}px`;
+        canvas.style.width = `${cssWidth}px`;
+        canvas.style.height = `${cssHeight}px`;
+        canvas.style.marginLeft = `${-CANVAS_BLEED_PX}px`;
+        canvas.style.marginTop = `${-CANVAS_BLEED_PX}px`;
         canvas.style.backgroundColor = '#ffffff';
         canvas.style.display = 'block';
     }
 
-    if (game.scale.width !== viewport.pixelWidth || game.scale.height !== viewport.pixelHeight)
+    if (game.scale.width !== pixelWidth || game.scale.height !== pixelHeight)
     {
-        game.scale.resize(viewport.pixelWidth, viewport.pixelHeight);
+        game.scale.resize(pixelWidth, pixelHeight);
     }
 
-    return viewport;
+    return {
+        ...viewport,
+        visiblePixelWidth: viewport.pixelWidth,
+        visiblePixelHeight: viewport.pixelHeight,
+        bleedPixelX: Math.round(CANVAS_BLEED_PX * viewport.dpr),
+        bleedPixelY: Math.round(CANVAS_BLEED_PX * viewport.dpr),
+        pixelWidth,
+        pixelHeight
+    };
 }
 
 export function bindResponsiveResize(game, onResize)
@@ -74,8 +88,6 @@ export function bindResponsiveResize(game, onResize)
     };
 
     window.addEventListener('resize', schedule);
-    window.visualViewport?.addEventListener('resize', schedule);
-    window.visualViewport?.addEventListener('scroll', schedule);
 
     for (const delay of RETRY_DELAYS)
     {
@@ -91,7 +103,5 @@ export function bindResponsiveResize(game, onResize)
         }
 
         window.removeEventListener('resize', schedule);
-        window.visualViewport?.removeEventListener('resize', schedule);
-        window.visualViewport?.removeEventListener('scroll', schedule);
     };
 }

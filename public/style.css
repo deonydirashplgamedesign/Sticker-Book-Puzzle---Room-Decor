@@ -16,8 +16,13 @@ body {
 }
 
 #game-container,
-#game-container canvas {
+#game-container {
     display: block;
     width: 100vw;
     height: 100vh;
+    overflow: hidden;
+}
+
+#game-container canvas {
+    display: block;
 }

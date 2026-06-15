@@ -633,6 +633,9 @@ const TRAY_NUMBER_TEXT_DEPTH = 12.6;
 const END_CARD_DEPTH = 2000;
 const END_CARD_CLICK_LIMIT = 10;
 const END_CARD_TIME_LIMIT = 60000;
+const REMAINING_STICKER_DELAY_MS = 58;
+const REMAINING_STICKER_DURATION_MS = 340;
+const REMAINING_STICKER_SETTLE_MS = 220;
 const REMAINING_TRAY_IDS = NUMBERED_STICKERS.map((placement) => placement.id)
     .filter((id) => !INITIAL_TRAY_IDS.includes(id))
     .sort((a, b) => a - b);
@@ -669,6 +672,7 @@ export class Game extends Scene
         super('Game');
 
         this.viewportState = '';
+        this.layoutMetrics = null;
         this.unbindResponsiveResize = null;
         this.numberedStickers = [];
         this.numberLabels = [];
@@ -893,12 +897,11 @@ export class Game extends Scene
         });
 
         this.input.on('drag', (pointer, gameObject, dragX, dragY) => {
-            const width = this.scale.width;
-            const height = this.scale.height;
+            const { bleedX, bleedY, visibleRight, visibleBottom } = this.getLayoutMetrics();
             const halfWidth = gameObject.displayWidth * 0.5;
             const halfHeight = gameObject.displayHeight * 0.5;
-            gameObject.x = Math.min(Math.max(dragX, halfWidth), width - halfWidth);
-            gameObject.y = Math.min(Math.max(dragY, halfHeight), height - halfHeight);
+            gameObject.x = Math.min(Math.max(dragX, bleedX + halfWidth), visibleRight - halfWidth);
+            gameObject.y = Math.min(Math.max(dragY, bleedY + halfHeight), visibleBottom - halfHeight);
 
             const trayItem = this.trayItems.find((item) => item.image === gameObject);
             if (trayItem)
@@ -917,7 +920,7 @@ export class Game extends Scene
             this.handleTrayDrop(gameObject);
         });
 
-        this.unbindResponsiveResize = bindResponsiveResize(this.game, () => this.relayout());
+        this.unbindResponsiveResize = bindResponsiveResize(this.game, (viewport) => this.relayout(undefined, viewport));
         this.events.once('shutdown', () => {
             this.unbindResponsiveResize?.();
             this.endCardTimer?.remove(false);
@@ -955,23 +958,60 @@ export class Game extends Scene
         this.bgmSound.play();
     }
 
+    getLayoutMetrics (viewport = null)
+    {
+        if (!viewport && this.layoutMetrics)
+        {
+            return this.layoutMetrics;
+        }
+
+        const width = this.scale.width;
+        const height = this.scale.height;
+        const visibleWidth = viewport?.visiblePixelWidth ?? width;
+        const visibleHeight = viewport?.visiblePixelHeight ?? height;
+        const bleedX = viewport?.bleedPixelX ?? Math.max(0, Math.round((width - visibleWidth) * 0.5));
+        const bleedY = viewport?.bleedPixelY ?? Math.max(0, Math.round((height - visibleHeight) * 0.5));
+        const baseLayout = getResponsiveLayout(visibleWidth, visibleHeight);
+        const layout = {
+            ...baseLayout,
+            offX: baseLayout.offX + bleedX,
+            offY: baseLayout.offY + bleedY,
+            sx: (x) => bleedX + baseLayout.sx(x),
+            sy: (y) => bleedY + baseLayout.sy(y),
+            sd: baseLayout.sd
+        };
+
+        this.layoutMetrics = {
+            width,
+            height,
+            visibleWidth,
+            visibleHeight,
+            bleedX,
+            bleedY,
+            visibleRight: bleedX + visibleWidth,
+            visibleBottom: bleedY + visibleHeight,
+            layout
+        };
+
+        return this.layoutMetrics;
+    }
+
     update ()
     {
         const viewport = resizeGameToViewport(this.game);
-        const viewportState = `${viewport.pixelWidth}:${viewport.pixelHeight}:${viewport.dpr}`;
+        const viewportState = `${viewport.pixelWidth}:${viewport.pixelHeight}:${viewport.visiblePixelWidth}:${viewport.visiblePixelHeight}:${viewport.dpr}`;
 
         if (viewportState !== this.viewportState)
         {
-            this.relayout(viewportState);
+            this.relayout(viewportState, viewport);
         }
     }
 
-    relayout (viewportState = `${this.scale.width}:${this.scale.height}:${window.devicePixelRatio || 1}`)
+    relayout (viewportState = `${this.scale.width}:${this.scale.height}:${window.devicePixelRatio || 1}`, viewport = null)
     {
-        const width = this.scale.width;
-        const height = this.scale.height;
-        const layout = getResponsiveLayout(width, height);
-        const trayDock = getTrayDockLayout(width, height, layout);
+        const metrics = this.getLayoutMetrics(viewport);
+        const { width, height, visibleBottom, layout } = metrics;
+        const trayDock = getTrayDockLayout(width, visibleBottom, layout);
 
         this.viewportState = viewportState;
 
@@ -1249,7 +1289,7 @@ export class Game extends Scene
             return;
         }
 
-        const layout = getResponsiveLayout(this.scale.width, this.scale.height);
+        const { layout } = this.getLayoutMetrics();
         const centerX = targetImage.x + targetImage.displayWidth * 0.5;
         const centerY = targetImage.y + targetImage.displayHeight * 0.5;
 
@@ -1324,7 +1364,7 @@ export class Game extends Scene
             return;
         }
 
-        const layout = getResponsiveLayout(this.scale.width, this.scale.height);
+        const { layout } = this.getLayoutMetrics();
 
         this.trayItems
             .filter((item) => !item.matched)
@@ -1506,7 +1546,7 @@ export class Game extends Scene
 
     revealCompletedSceneThenShowEndCard ()
     {
-        const layout = getResponsiveLayout(this.scale.width, this.scale.height);
+        const { layout } = this.getLayoutMetrics();
 
         this.backgroundFinished
             .setVisible(true)
@@ -1546,8 +1586,10 @@ export class Game extends Scene
                 this.updateEndSceneFillReveal();
                 this.endSceneRevealSideCover?.setVisible(false);
                 this.endSceneRevealCover?.setVisible(false);
-                this.showAllColoredStickers();
-                this.time.delayedCall(220, () => this.showEndCard());
+                this.showPlacedColoredStickers();
+                this.animateRemainingStickers(() => {
+                    this.time.delayedCall(REMAINING_STICKER_SETTLE_MS, () => this.showEndCard());
+                });
             }
         });
     }
@@ -1564,10 +1606,16 @@ export class Game extends Scene
         triggerCTA();
     }
 
-    showAllColoredStickers ()
+    showPlacedColoredStickers ()
     {
         for (const { placement, image } of this.numberedStickers)
         {
+            if (!this.matchedStickerIds.has(placement.id))
+            {
+                image.setVisible(false);
+                continue;
+            }
+
             image
                 .setTexture(`colored-${placement.id}`)
                 .setVisible(true)
@@ -1586,6 +1634,54 @@ export class Game extends Scene
             item.circle?.setVisible(false);
             item.text?.setVisible(false);
         }
+    }
+
+    animateRemainingStickers (onComplete)
+    {
+        const { layout } = this.getLayoutMetrics();
+        const remainingEntries = this.numberedStickers
+            .filter(({ placement }) => !this.matchedStickerIds.has(placement.id))
+            .sort((a, b) => a.placement.id - b.placement.id);
+
+        if (remainingEntries.length === 0)
+        {
+            onComplete?.();
+            return;
+        }
+
+        const finalDelay = (remainingEntries.length - 1) * REMAINING_STICKER_DELAY_MS + REMAINING_STICKER_DURATION_MS;
+
+        remainingEntries.forEach(({ placement, image }, index) => {
+            const targetX = layout.sx(placement.x);
+            const targetY = layout.sy(placement.y);
+            const targetScale = layout.s * (placement.scale ?? DEFAULT_STICKER_SCALE);
+            const startAngle = index % 2 === 0 ? -5 : 5;
+
+            this.tweens.killTweensOf(image);
+            image
+                .setTexture(`colored-${placement.id}`)
+                .setVisible(true)
+                .setDepth(placement.zIndex ?? 0)
+                .setAlpha(0)
+                .setPosition(targetX, targetY - layout.sd(46))
+                .setScale(targetScale * 1.18)
+                .setAngle(startAngle);
+
+            this.tweens.add({
+                targets: image,
+                x: targetX,
+                y: targetY,
+                scaleX: targetScale,
+                scaleY: targetScale,
+                angle: 0,
+                alpha: 1,
+                duration: REMAINING_STICKER_DURATION_MS,
+                delay: index * REMAINING_STICKER_DELAY_MS,
+                ease: 'Back.easeOut'
+            });
+        });
+
+        this.time.delayedCall(finalDelay, () => onComplete?.());
     }
 
     showEndCard ()
@@ -1634,7 +1730,7 @@ export class Game extends Scene
             return;
         }
 
-        const layout = getResponsiveLayout(this.scale.width, this.scale.height);
+        const { layout } = this.getLayoutMetrics();
         const width = this.scale.width;
         const height = this.scale.height;
         const wasPulsing = this.endCardButtonPulseActive;
@@ -1717,7 +1813,7 @@ export class Game extends Scene
 
         const width = this.scale.width;
         const height = this.scale.height;
-        const layout = getResponsiveLayout(width, height);
+        const { layout } = this.getLayoutMetrics();
         const progress = PhaserMath.Clamp(this.backgroundRevealProgress, 0, 1);
         const revealTop = height * (1 - progress);
 
@@ -1750,8 +1846,8 @@ export class Game extends Scene
             return;
         }
 
-        const layout = getResponsiveLayout(this.scale.width, this.scale.height);
-        const trayDock = getTrayDockLayout(this.scale.width, this.scale.height, layout);
+        const { width, visibleBottom, layout } = this.getLayoutMetrics();
+        const trayDock = getTrayDockLayout(width, visibleBottom, layout);
         const slotX = trayDock.x(trayItem.slot.x);
         const slotY = trayDock.y(trayItem.slot.y);
         gameObject.setPosition(slotX, slotY);
@@ -1901,7 +1997,7 @@ export class Game extends Scene
         }
 
         const targetImage = target.image;
-        const layout = getResponsiveLayout(this.scale.width, this.scale.height);
+        const { layout } = this.getLayoutMetrics();
 
         return {
             startX: trayItem.image.x + layout.sd(38),
